@@ -1,15 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Vimium",
-  "version": "2.1.2",
+  "version": "2.4.0",
   "description": "The Hacker's Browser. Vimium provides keyboard shortcuts for navigation and control in the spirit of Vim.",
   "icons": { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
-  "minimum_chrome_version": "105.0",
+  "minimum_chrome_version": "117.0",
   "background": {
-    "service_worker": "background_scripts/background.js",
+    "service_worker": "background_scripts/main.js",
     "type": "module"
     // Uncomment when developing in Firefox.
-    // "scripts": ["background_scripts/background.js"]
+    // "scripts": ["background_scripts/main.js"]
   },
   "options_ui": {
     "page": "pages/options.html",
@@ -37,6 +37,7 @@
     {
       "matches": ["chrome://*/*","<all_urls>"],
       "js": [
+        "lib/types.js",
         "lib/utils.js",
         "lib/keyboard_utils.js",
         "lib/dom_utils.js",
@@ -90,11 +91,12 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "pages/vomnibar.html",
+        "pages/vomnibar_page.html",
         "content_scripts/vimium.css",
-        "pages/hud.html",
-        "pages/help_dialog.html",
-        "pages/completion_engines.html",
+        "pages/hud_page.html",
+        "pages/help_dialog_page.html",
+        "pages/doc_completion_engines.html",
+        "pages/command_listing.html",
         "resources/tlds.txt",
         // This allows one to script the reloading of Vimium.
         // This should only be enabled in development.

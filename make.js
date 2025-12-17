@@ -1,16 +1,16 @@
-#!/usr/bin/env -S deno run --allow-read --allow-write --allow-env --allow-net --allow-run
+#!/usr/bin/env -S deno run --allow-read --allow-write --allow-env --allow-net --allow-run --allow-sys
 // Usage: ./make.js command. Use -l to list commands.
 // This is a set of tasks for building and testing Vimium in development.
-import * as fs from "https://deno.land/std@0.122.0/fs/mod.ts";
-import * as fsCopy from "https://deno.land/std@0.122.0/fs/copy.ts";
-import * as path from "https://deno.land/std@0.136.0/path/mod.ts";
+import * as fs from "@std/fs";
+import * as path from "@std/path";
 import { abort, desc, run, task } from "https://deno.land/x/drake@v1.5.1/mod.ts";
-import puppeteer from "https://deno.land/x/puppeteer@16.2.0/mod.ts";
+import puppeteer from "npm:puppeteer";
+// We use a vendored version of shoulda, rather than jsr:@philc/shoulda, because shoulda.js is used
+// in dom_tests.js which is loaded by Puppeteer, which doesn't have access to Deno's module system.
 import * as shoulda from "./tests/vendor/shoulda.js";
-import JSON5 from "https://deno.land/x/json5@v1.0.0/mod.ts";
-import { DOMParser } from "https://deno.land/x/deno_dom/deno-dom-wasm.ts";
-import * as fileServer from "https://deno.land/std@0.208.0/http/file_server.ts";
-import { getAvailablePort } from "https://deno.land/x/port/mod.ts";
+import JSON5 from "npm:json5";
+import { DOMParser } from "@b-fuze/deno-dom";
+import * as fileServer from "@std/http/file-server";
 
 const projectPath = new URL(".", import.meta.url).pathname;
 
@@ -43,7 +43,7 @@ function createFirefoxManifest(manifest) {
   // As of 2023-07-08 Firefox doesn't yet support background.service_worker.
   delete manifest.background["service_worker"];
   Object.assign(manifest.background, {
-    "scripts": ["background_scripts/background.js"],
+    "scripts": ["background_scripts/main.js"],
   });
 
   // This key is only supported by Firefox.
@@ -58,6 +58,9 @@ function createFirefoxManifest(manifest) {
         // development mode, or many extension APIs don't work.
         "id": "{d7742d87-e61d-4b78-b8a1-b469842139fa}",
         "strict_min_version": "112.0",
+        "data_collection_permissions": {
+          "required": ["none"],
+        },
       },
     },
   });
@@ -95,10 +98,14 @@ async function buildStorePackage() {
     ".*",
     "CREDITS",
     "MIT-LICENSE.txt",
+    "build_scripts",
     "dist",
     "make.js",
     "deno.json",
     "deno.lock",
+    // These reload scripts are used for development only and shouldn't appear in the build.
+    "reload.html",
+    "reload.js",
     "test_harnesses",
     "tests",
   ];
@@ -127,6 +134,7 @@ async function buildStorePackage() {
   ]);
   await shell("rsync", rsyncOptions);
 
+  // Build the Firefox / Mozilla Addons store package.
   const firefoxManifest = createFirefoxManifest(chromeManifest);
   await writeDistManifest(firefoxManifest);
   // Exclude PNG icons from the Firefox build, because we use the SVG directly.
@@ -153,7 +161,7 @@ async function buildStorePackage() {
   ]);
 }
 
-const runUnitTests = async () => {
+async function runUnitTests() {
   // Import every test file.
   const dir = path.join(projectPath, "tests/unit_tests");
   const files = Array.from(Deno.readDirSync(dir)).map((f) => f.name).sort();
@@ -164,7 +172,7 @@ const runUnitTests = async () => {
   }
 
   return await shoulda.run();
-};
+}
 
 function setupPuppeteerPageForTests(page) {
   // The "console" event emitted has arguments which are promises. To obtain the values to be
@@ -224,7 +232,7 @@ task("fetch-tlds", [], async () => {
   const doc = new DOMParser().parseFromString(text, "text/html");
   const els = doc.querySelectorAll("span.domain.tld");
   // Each span contains a TLD, e.g. ".com". Trim off the leading period.
-  const domains = Array.from(els).map((el) => el.innerText.slice(1));
+  const domains = Array.from(els).map((el) => el.textContent.slice(1));
   const str = domains.join("\n");
   await Deno.writeTextFile("./resources/tlds.txt", str);
 });
@@ -237,8 +245,40 @@ task("test-unit", [], async () => {
   }
 });
 
+function isPortAvailable(number) {
+  try {
+    const listener = Deno.listen({ port: number });
+    listener.close();
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function getAvailablePort() {
+  const min = 7000;
+  const max = 65535;
+  let count = 0;
+  const getRandomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+  let port = getRandomInt(min, max);
+  while (!isPortAvailable(port) && count < max - min) {
+    port++;
+    if (port > max) {
+      port = min;
+    }
+    if (isPortAvailable(port)) {
+      return port;
+    }
+    count++;
+    if (count >= max - min) {
+      throw new Error(`No port is available in the range ${min} - ${max}`);
+    }
+  }
+  return port;
+}
+
 async function testDom() {
-  const port = await getAvailablePort();
+  const port = getAvailablePort();
   let served404 = false;
   const httpServer = Deno.serve({ port }, async (req) => {
     const url = new URL(req.url);
@@ -255,7 +295,7 @@ async function testDom() {
     }
   });
 
-  const files = ["dom_tests.html", "vomnibar_test.html"];
+  const files = ["dom_tests.html"];
   const browser = await puppeteer.launch();
   let success = true;
   for (const file of files) {
@@ -274,7 +314,7 @@ async function testDom() {
     }
     // If we close the puppeteer page (tab) via page.close(), we can get innocuous but noisy output
     // like this:
-    // net::ERR_ABORTED http://localhost:43524/pages/hud.html?dom_tests=true
+    // net::ERR_ABORTED http://localhost:43524/pages/hud_page.html?dom_tests=true
     // There's probably a way to prevent that, but as a work around, we avoid closing the page.
     // browser.close() will close all of its owned pages.
   }
@@ -295,8 +335,14 @@ desc("Run unit and DOM tests");
 task("test", ["test-unit", "test-dom"]);
 
 desc("Builds a zip file for submission to the Chrome and Firefox stores. The output is in dist/");
-task("package", [], async () => {
+task("package", ["write-command-listing"], async () => {
   await buildStorePackage();
+});
+
+desc("Build a static version of command_listing.html, to be hosted on vimium.gihub.io");
+task("write-command-listing", [], async () => {
+  // Run this script in a separate shell so it doesn't pollute our JS environment.
+  await shell("./build_scripts/write_command_listing_page.js", []);
 });
 
 desc("Replaces manifest.json with a Firefox-compatible version, for development");
